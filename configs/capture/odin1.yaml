@@ -1,0 +1,88 @@
+# Odin 传感器取图配置
+#
+# ROS 版本已确认：**ROS 1 Noetic**（2026-08-01 在 Go2 NX 上实测）
+#   证据 1: odin_ros_driver/package.xml 用 <buildtool_depend>catkin</buildtool_depend>
+#   证据 2: go2_start_odin.sh 执行 `roslaunch odin_ros_driver odin1_ros1.launch`
+#   /opt/ros 下 foxy 与 noetic 并存，但 Odin 驱动走 noetic，取图端一律用 rospy。
+#
+# 标注为 "待探测确认" 的字段已在 2026-08-01 实测回填（驱动启动后）。
+# 重新探测：开发机跑 `make`，或在 NX 上跑
+#   bash scripts/nx_start_capture.sh --probe 5
+
+sensor:
+  name: odin1
+  # 话题名 2026-08-01 实测确认（rostopic list，驱动已启动）。
+  # 注意 compressed 是 `/odin1/image/compressed` 而不是 `/odin1/compressed_image`：
+  # 驱动用的是 image_transport 标准命名，子话题挂在 raw 话题名下面。
+  raw_topic: /odin1/image
+  compressed_topic: /odin1/image/compressed
+
+  # 驱动实际还发了这几路图（实测），备选：
+  #   /odin1/image/undistorted    鱼眼去畸变图。**实测：只 advertise，不发数据**（hz/bw 采不到）。
+  #                               Odin 是鱼眼（工作区有 fish2pinhole 包），读表盘/铭牌本来靠这路更准，
+  #                               要用得先在驱动配置里把它打开（待确认）
+  #   /odin1/image/intensity_gray 强度灰度图。同样只 advertise 不发数据
+  #   /odin1/overlay_image        叠加图，发布者是 /image_overlay_node
+  #   /odin1/reprojected_image    点云重投影图
+  # 现阶段只有 image 和 image/compressed 真在发数据，所以默认就用后者。
+
+  # 以下由 `_bootstrap/nx_odin_probe.sh` 在 Go2 NX 上实测得到（2026-08-01），不是猜的。
+  # 原始输出见 _bootstrap/nx_odin.log。
+  raw_encoding: bgr8
+  width: 1600
+  height: 1296
+  fps: 10.2                 # 实测 average rate 10.221（raw 与 compressed 同频）
+
+  # header.frame_id 实测是**空字符串**，不是某个坐标系名。
+  # 影响：没法靠 frame_id 做 TF 对齐，证据留档也不能拿它当来源标识，
+  # 所以下游一律用 topic 名 + seq + stamp 来标识一帧（见 capture/base.py 的 Frame）。
+  # 留 null 而不是填 ""，是为了让「读到空」和「没测过」在配置层保持可区分。
+  frame_id: null
+
+  # 单帧体积与带宽（实测，是「为什么默认 compressed」的直接依据）：
+  #   raw        6220800 B/帧（1600*1296*3，step=4800）→ 69.80 MB/s
+  #   compressed                                        →  4.60 MB/s
+  # 15 倍差距。raw 走网口传给开发机是不现实的。
+
+capture:
+  # compressed | raw | both
+  #   both      探测/联调阶段用，两个话题都订阅
+  #   compressed 上线默认：省带宽、可零解码透传
+  #   raw       仅当 compressed 画质不足以支撑某类检查项时才切
+  prefer: compressed
+
+  # 订阅 QoS —— **仅 ROS 2 有效**。NX 上是 ROS 1 Noetic，这段不生效，
+  # ROS 1 侧对应的是 rospy Subscriber 的 queue_size=1 + buff_size=16MB
+  # （buff_size 默认 64KB 装不下一帧图，会导致「帧率正常但画面越拿越旧」，
+  #   见 capture/ros1_odin_node.py 的 IMAGE_BUFF_SIZE）。
+  # 保留本段是为了将来若切 ROS 2 无需重新推导。
+  qos:
+    reliability: best_effort
+    history: keep_last
+    depth: 1
+
+  # 帧新鲜度门限：超过此年龄的帧视为陈旧，检查时拒绝使用
+  max_age_ms: 1000
+  # 取图超时
+  timeout_s: 2.0
+
+  # 长边缩放。0/null = 不缩放。
+  # 巡检检查建议：先按 1280 试，若小目标（远处指示灯/铭牌）识别不足再上调；
+  # ROI 裁剪比整图放大更有效，见 capture/decode.py 的 crop_roi。
+  long_side: 1280
+  jpeg_quality: 90
+
+# 取图服务（跨 Python 环境 / 跨机器的边界，见 capture/frame_server.py 文档）
+#
+# 当前部署形态（依据 NX 实测环境决定，不是预设）：
+#   NX 只跑取图 —— python3.8 + rospy + numpy 1.24.4 + cv2 4.2.0，全部现成，零安装；
+#   推理放开发机 —— NX 上 torch 是坏的（ImportError）、transformers 未装，
+#                   且 NX 有导航程序在跑，不宜装环境。
+# 所以：NX 起 frame_server，开发机用 --source http 反向拉帧。
+frame_server:
+  host: 0.0.0.0
+  port: 8730
+  # 推理进程侧填写的地址：
+  #   同机（将来 NX 具备推理条件后）  http://127.0.0.1:8730
+  #   边端分离（当前形态，开发机拉 NX） http://<PERCEPTION_HOST>:8730
+  client_url: http://<PERCEPTION_HOST>:8730

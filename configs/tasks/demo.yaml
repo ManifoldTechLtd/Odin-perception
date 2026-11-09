@@ -1,0 +1,95 @@
+# 示例检查清单 —— 演示三种检查类型怎么写。
+#
+# 这份文件不是给某个真实点位用的，是写清单的模板与参考。
+# 现场配置时按点位复制修改，并把 roi 按实际画面标出来。
+#
+# 提问的三条经验（直接影响小模型的准确率）：
+#   1. 问具体特征，不问抽象结论。
+#      差: "阀门状态正常吗"   —— 模型不知道什么算正常
+#      好: "红色阀门手柄是否与管道垂直" —— 有明确视觉依据
+#   2. 用英文提问。Moondream2 这个量级的模型英文指令遵循明显更好。
+#   3. 小目标必须给 roi。表盘/指示灯不裁 ROI 基本判不对。
+#
+# 关于 `target` 字段：只有 profile B2（Florence-2）会用到它。
+# Florence-2 不能自由问答，只能做「开词表检测」，所以它需要一个**名词短语**
+# 而不是一句问话。填了 target 的项在 A/B 下会被忽略，一份清单三个 profile 通用。
+# 有些检查本质上无法翻译成检测短语（比如「手柄是否与管道垂直」——没有任何
+# 词条能表达姿态），这类项在 B2 下会失准，已在下面逐条标注。
+
+version: 1
+
+defaults:
+  severity: normal
+
+items:
+  # ---------------------------------------------------------------- 是非判断
+  - id: valve_01_closed
+    name: 1号进水阀关闭状态
+    kind: yes_no
+    question: Is the red valve handle perpendicular to the pipe
+    expect: "yes"          # 垂直 = 关闭
+    # B2(Florence-2) 下这条**测不准**：检测词条无法表达「垂直」这种姿态关系。
+    # 留 target 只为让它有东西可找，真要用 B2 就得把这条改成传统 CV 或换 A/B。
+    target: red valve handle
+    roi: [0.35, 0.40, 0.65, 0.75]
+    location: 1号泵房-东侧
+    severity: high
+
+  - id: pump_01_leak
+    name: 1号泵体渗漏
+    kind: yes_no
+    question: Are there any oil stains, water drops, or wet marks on the pump body or the floor beneath it
+    expect: "no"           # 期望「没有渗漏」
+    # 这条适合 B2：「有没有 X」正是开词表检测的强项。
+    # 但注意 Florence-2 的检测是生成式的，倾向于「让它找就给个框」，
+    # 所以 expect=no 的项在 B2 下假阳性（误报 FAIL）会偏多。
+    target: oil stain or water leak on the floor
+    location: 1号泵房-东侧
+    severity: high
+
+  # ---------------------------------------------------------------- 状态判别
+  - id: panel_01_indicator
+    name: 配电柜运行指示灯
+    kind: state
+    question: What is the color of the indicator light on the panel
+    options: ["green", "red", "yellow", "off"]  # 引号必须保留：裸 off 会被 YAML 解析成 False
+    expect: green
+    # B2 下会把 target 拼在每个 option 后面逐个检测（"green indicator light"...），
+    # 即 4 次推理，延迟是其他类型的 4 倍。
+    target: indicator light
+    roi: [0.42, 0.20, 0.58, 0.35]   # 指示灯很小，必须裁
+    location: 配电室-1号柜
+    severity: high
+
+  - id: breaker_01_position
+    name: 1号断路器手柄位置
+    kind: state
+    question: Is the breaker switch handle in the ON position or the OFF position
+    options: ["on", "off"]  # 引号必须保留：裸 on/off 会被 YAML 解析成 True/False
+    expect: "on"
+    # 同 valve_01：B2 下测不准，开/关是姿态而非可检测的物体。
+    target: breaker switch handle
+    roi: [0.30, 0.45, 0.55, 0.70]
+    location: 配电室-1号柜
+
+  # ---------------------------------------------------------------- 读数/读字
+  - id: gauge_01_reading
+    name: 1号压力表读数
+    kind: read_text
+    # 指针表读数小模型很不擅长，这里读的是数显表。
+    # 指针表建议后续走传统 CV（拟合指针角度），见选型文档的风险表。
+    question: What number is shown on the digital display
+    expect: '^0?\.[3-6]\d*$'        # expect 当正则用，表达合格区间 0.3~0.6
+    # read_text 在 B2 下走 <OCR>，不需要 target，而且是 Florence-2 的强项——
+    # 这类项用 B2 反而可能比 A 更准。
+    roi: [0.40, 0.35, 0.60, 0.55]
+    location: 1号泵房-压力表
+
+  - id: nameplate_01_id
+    name: 设备铭牌编号
+    kind: read_text
+    question: What is the equipment number printed on the nameplate
+    # 不填 expect 表示只记录不判定——用于建档和后续时序对比
+    roi: [0.25, 0.30, 0.75, 0.50]
+    location: 1号泵房-东侧
+    severity: low

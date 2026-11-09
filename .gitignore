@@ -1,0 +1,25 @@
+# 权重与缓存（永不入库）
+models/
+.hf_home/
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.bin
+*.ckpt
+
+# 环境
+.venv*/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 运行产物
+runs/
+*.log
+
+# 编辑器
+.DS_Store
+.idea/
+.vscode/

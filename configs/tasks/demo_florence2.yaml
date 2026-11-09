@@ -1,0 +1,113 @@
+# 示例检查清单（算子版）—— profile B2（Florence-2 端侧）专用。
+#
+# 和 demo.yaml 的区别
+# ------------------
+# demo.yaml 走「自由问答」：把一句问话发给模型，让它用语言回答。适合 A（平台
+# Moondream2/VLM-FO1）和 B（SmolVLM）这类能问答的后端。
+#
+# 本文件走「定位 + 确定性算子」：Florence-2 不能自由问答，但它能框、能分割、能
+# OCR。所以每条 item 里给一条 `rule`，声明用哪个算子——模型只负责「看见了什么」，
+# 「合格与否」交给纯 numpy 的确定性计算。好处：同一张图永远同一个结论、判错了能从
+# 存证 detail 里看到框/角度/票数、可以用合成图离线验证（见 tests/test_ops.py）。
+#
+# rule 的完整参数见 inspection_perception/checks/ops.py，非法配置在加载清单时
+# 就会报错（validate_rule），不会等到现场才发现全是 UNKNOWN。
+#
+# 注意：带 detect/segment 的算子只有定位型后端（florence2）能跑。用这份清单跑
+# Moondream2/SmolVLM 会得到明确的 RuleError（提示改用 op=vqa 或换 florence2），
+# 而不是悄悄给出没有依据的答案。ocr_text / vqa 两个算子在所有后端下都能跑。
+
+version: 1
+
+defaults:
+  severity: normal
+
+items:
+  # ---------------------------------------------------------------- 姿态：分割主轴
+  - id: valve_01_closed
+    name: 1号进水阀关闭状态
+    kind: yes_no
+    question: Is the red valve handle in the closed position   # 仅作人类可读记录
+    expect: "yes"                     # 竖直 = 关闭
+    roi: [0.35, 0.40, 0.65, 0.75]
+    location: 1号泵房-东侧
+    severity: high
+    rule:
+      op: segment_orientation         # 分割手柄轮廓 → 主轴角度 → 竖直/水平
+      target: red valve handle
+      tol_deg: 30                      # 死区带：44°/46° 不再给出相反结论
+      min_elongation: 1.25             # 不够细长（不是杆状）→ unclear，不猜
+      map: {vertical: "yes", horizontal: "no"}
+
+  # ---------------------------------------------------------------- 有无：开词表检测 + 面积过滤
+  - id: pump_01_leak
+    name: 1号泵体渗漏
+    kind: yes_no
+    question: Are there any oil stains or wet marks on the pump body or floor
+    expect: "no"                      # 期望「没有渗漏」
+    location: 1号泵房-东侧
+    severity: high
+    rule:
+      op: presence
+      target: oil stain or water leak on the floor
+      mode: ovd                        # presence 只准用 OVD（grounding 会假定目标存在，必假阳性）
+      max_area_frac: 0.9               # 关键：找不到目标时 Florence-2 会返回整图框，不卡上限会稳定误报 FAIL
+      min_count: 1
+
+  # ---------------------------------------------------------------- 颜色：色相统计
+  - id: panel_01_indicator
+    name: 配电柜运行指示灯
+    kind: state
+    question: What is the color of the indicator light on the panel
+    options: ["green", "red", "yellow", "off"]  # 引号必须保留：裸 off 会被 YAML 解析成 False
+    expect: green
+    roi: [0.42, 0.20, 0.58, 0.35]     # 指示灯很小，必须裁；有了 ROI 就不必再 locate
+    location: 配电室-1号柜
+    severity: high
+    rule:
+      op: region_color
+      colors: [green, red, yellow]     # 只投可能出现的颜色（off 自动判定，不用写）
+      locate: false                    # 已有 ROI，不再花一次推理去定位
+      bright_percentile: 75            # 只用最亮的一撮像素投票，避免被面板底色稀释
+      off_v: 0.22                      # 亮度中位数低于此 → off（灯灭）
+
+  # ---------------------------------------------------------------- 姿态：角度区间映射
+  - id: breaker_01_position
+    name: 1号断路器手柄位置
+    kind: state
+    question: Is the breaker switch handle in the ON or OFF position
+    options: ["on", "off"]  # 引号必须保留：裸 on/off 会被 YAML 解析成 True/False
+    expect: "on"
+    roi: [0.30, 0.45, 0.55, 0.70]
+    location: 配电室-1号柜
+    rule:
+      op: segment_orientation
+      target: breaker switch handle
+      min_elongation: 1.25
+      # angle_map 用无向角区间 [0,180)，from>to 表示跨 0° 环绕。
+      # 竖直(接近 90°)=合闸 on；其余(接近水平)=分闸 off。
+      angle_map:
+        - {from: 60, to: 120, answer: "on"}    # 近竖直
+        - {from: 120, to: 60, answer: "off"}   # 环绕：[120,180)∪[0,60)，近水平
+
+  # ---------------------------------------------------------------- 读字：OCR
+  - id: gauge_01_reading
+    name: 1号压力表读数
+    kind: read_text
+    question: What number is shown on the digital display
+    expect: '^0?\.[3-6]\d*$'          # expect 当正则用，表达合格区间 0.3~0.6
+    roi: [0.40, 0.35, 0.60, 0.55]
+    location: 1号泵房-压力表
+    rule:
+      op: ocr_text                     # Florence-2 的 <OCR> 是它的强项；无 ocr() 的后端会回落自由问答
+
+  - id: nameplate_01_id
+    name: 设备铭牌编号
+    kind: read_text
+    question: What is the equipment number printed on the nameplate
+    # 不填 expect 表示只记录不判定——用于建档和后续时序对比
+    roi: [0.25, 0.30, 0.75, 0.50]
+    location: 1号泵房-东侧
+    severity: low
+    rule:
+      op: ocr_text

@@ -1,0 +1,35 @@
+{
+  "_comment": "最小冒烟清单（JSON 版）。PyYAML 未安装时也能跑，用于验证链路本身。demo.yaml 才是写清单的参考模板。",
+  "version": 1,
+  "items": [
+    {
+      "id": "smoke_yes_no",
+      "name": "冒烟-是非判断",
+      "kind": "yes_no",
+      "question": "Is there any visible object in the image",
+      "expect": "yes"
+    },
+    {
+      "id": "smoke_state",
+      "name": "冒烟-状态判别",
+      "kind": "state",
+      "question": "What is the dominant color in this image",
+      "options": ["green", "red", "black"],
+      "expect": "black"
+    },
+    {
+      "id": "smoke_read_text",
+      "name": "冒烟-读数",
+      "kind": "read_text",
+      "question": "What number is shown in the image"
+    },
+    {
+      "id": "smoke_roi",
+      "name": "冒烟-ROI裁剪",
+      "kind": "yes_no",
+      "question": "Is the center region uniform in color",
+      "expect": "yes",
+      "roi": [0.25, 0.25, 0.75, 0.75]
+    }
+  ]
+}

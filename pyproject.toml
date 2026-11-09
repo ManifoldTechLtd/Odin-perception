@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odin-perception"
+version = "0.2.0"
+description = "Edge inspection perception: Florence-2 based grounding pipeline"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Manifold Tech Ltd." }]
+dependencies = [
+  "numpy>=1.21",
+  "Pillow>=9.0",
+  "PyYAML>=6.0",
+  "opencv-python-headless>=4.5",
+  "torch>=1.13",
+  # Florence-2 remote code 版本敏感，实测 4.46.3 可用
+  "transformers==4.46.3",
+  "timm==1.0.9",
+  "einops>=0.7",
+  "huggingface_hub>=0.23",
+]
+
+[project.scripts]
+perception-run = "inspection_perception.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["inspection_perception*"]
